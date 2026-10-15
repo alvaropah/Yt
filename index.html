@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Transferir Suscripciones de YouTube</title>
+  <title>Transferir Suscripciones YT v2</title>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <style>
     body {
@@ -14,7 +14,8 @@
       background: #121212;
       color: #e0e0e0;
     }
-    h2 { color: #ff4e45; }
+    h2 { color: #00e676; margin-bottom: 4px; }
+    .version { font-size: 13px; color: #888; margin-bottom: 16px; }
     .card {
       background: #1e1e1e;
       padding: 16px;
@@ -39,6 +40,12 @@
       font-weight: bold;
       cursor: pointer;
     }
+    button.secondary {
+      background: #333;
+      font-size: 13px;
+      padding: 8px;
+      margin-top: 10px;
+    }
     button:disabled {
       background: #555;
       color: #888;
@@ -48,7 +55,7 @@
       background: #000;
       color: #00ff66;
       padding: 12px;
-      height: 280px;
+      height: 300px;
       overflow-y: auto;
       font-family: monospace;
       font-size: 13px;
@@ -60,7 +67,8 @@
 </head>
 <body>
 
-  <h2>Transferir Suscripciones YT (Ahorro de Cuota)</h2>
+  <h2>Transferir Suscripciones YT (v2.0)</h2>
+  <div class="version">✅ Modo Ahorro Total Activo (Filtro API + Memoria en Tablet)</div>
 
   <div class="card">
     <label><strong>Paso 1: Tu Client ID de Google Cloud</strong></label>
@@ -75,7 +83,8 @@
 
   <div class="card">
     <label><strong>Paso 3: Cuenta de Destino</strong></label>
-    <button id="btnDest" onclick="transferSubs()" disabled>2. Conectar Destino y Transferir (Filtrando duplicados)</button>
+    <button id="btnDest" onclick="transferSubs()" disabled>2. Filtrar Duplicados y Transferir</button>
+    <button class="secondary" onclick="clearMemory()">Borrar memoria local de canales guardados</button>
   </div>
 
   <div id="log">Esperando acciones...\n</div>
@@ -83,6 +92,35 @@
   <script>
     let subsList = [];
     let tokenClient;
+    const STORAGE_KEY = 'yt_transferred_channels';
+
+    // Cargar Client ID si ya lo pegaste antes
+    window.onload = () => {
+      const savedId = localStorage.getItem('yt_client_id');
+      if (savedId) document.getElementById('clientId').value = savedId;
+      const savedChannels = getLocalDoneSet();
+      log(`💾 Memoria local cargada: ${savedChannels.size} canales ya marcados como hechos.`);
+    };
+
+    function getLocalDoneSet() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        return new Set(raw ? JSON.parse(raw) : []);
+      } catch {
+        return new Set();
+      }
+    }
+
+    function markChannelAsDone(channelId) {
+      const doneSet = getLocalDoneSet();
+      doneSet.add(channelId);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify([...doneSet]));
+    }
+
+    function clearMemory() {
+      localStorage.removeItem(STORAGE_KEY);
+      log('🗑️ Memoria local borrada.');
+    }
 
     function log(msg) {
       const logBox = document.getElementById('log');
@@ -96,10 +134,10 @@
         alert('Por favor, pega tu Client ID primero en el Paso 1.');
         return null;
       }
+      localStorage.setItem('yt_client_id', id);
       return id;
     }
 
-    // Función genérica para leer todas las suscripciones de cualquier cuenta (gasta solo 1 unidad por cada 50 canales)
     async function getAccountSubscriptions(token, label) {
       let list = [];
       let pageToken = '';
@@ -140,7 +178,7 @@
           try {
             subsList = await getAccountSubscriptions(resp.access_token, 'Origen');
             log(`✅ ¡Extracción completada! Total en origen: ${subsList.length} canales.`);
-            document.getElementById('statusSource').textContent = `${subsList.length} canales listos para comparar y transferir.`;
+            document.getElementById('statusSource').textContent = `${subsList.length} canales extraídos.`;
             document.getElementById('btnDest').disabled = false;
           } catch (err) {
             log('❌ Error al extraer: ' + err.message);
@@ -163,7 +201,7 @@
             log('❌ Error de autenticación: ' + resp.error);
             return;
           }
-          log('🔑 Cuenta destino conectada. Comprobando canales ya suscritos para ahorrar cuota...');
+          log('🔑 Cuenta destino conectada. Leyendo suscripciones actuales en destino...');
           await filterAndInsertSubs(resp.access_token);
         }
       });
@@ -174,24 +212,31 @@
       document.getElementById('btnDest').disabled = true;
 
       try {
-        // 1. Leemos primero los canales que YA tiene la cuenta de destino
+        // 1. Leer canales que ya tiene la cuenta destino en YouTube
         const existingSubs = await getAccountSubscriptions(token, 'Destino');
-        const existingIds = new Set(existingSubs.map(sub => sub.id));
+        const skipIds = getLocalDoneSet();
 
-        // 2. Filtramos para quedarnos SOLO con los que no están en la cuenta destino
-        const pendingSubs = subsList.filter(sub => !existingIds.has(sub.id));
+        for (const sub of existingSubs) {
+          skipIds.add(sub.id);
+        }
+        // Guardamos todos los detectados en la memoria de la tablet
+        localStorage.setItem(STORAGE_KEY, JSON.stringify([...skipIds]));
+
+        // 2. Filtrar la lista de origen
+        const pendingSubs = subsList.filter(sub => !skipIds.has(sub.id));
         const skippedCount = subsList.length - pendingSubs.length;
 
-        log(`🔍 Comprobación lista: Ya estás suscrito a ${skippedCount} de estos canales (ahorradas ${skippedCount * 50} unidades de cuota).`);
-        log(`🚀 Faltan por suscribir: ${pendingSubs.length} canales.`);
+        log(`🛡️ Filtro completado:`);
+        log(`   - Saltados por estar ya suscrito: ${skippedCount} canales (0 cuota gastada).`);
+        log(`   - Pendientes reales por suscribir: ${pendingSubs.length} canales.`);
 
         if (pendingSubs.length === 0) {
-          log('🎉 ¡Ya estás suscrito a todos los canales! No hace falta transferir nada.');
+          log('🎉 ¡Todos los canales están ya en tu cuenta destino!');
           document.getElementById('btnDest').disabled = false;
           return;
         }
 
-        // 3. Nos suscribimos únicamente a los canales pendientes
+        // 3. Suscribir solo a los que faltan
         let ok = 0;
         for (let i = 0; i < pendingSubs.length; i++) {
           const sub = pendingSubs[i];
@@ -214,13 +259,18 @@
             const data = await res.json();
 
             if (data.error) {
-              log(`[${i+1}/${pendingSubs.length}] ⚠️ Error en ${sub.title}: ${data.error.message}`);
-              if (data.error.message.includes('quotaExceeded')) {
-                log('🛑 Límite diario alcanzado (~200 canales/día). Mañana podrás continuar exactamente desde aquí sin gastar cuota en los ya hechos.');
+              if (data.error.message.includes('subscriptionDuplicate')) {
+                markChannelAsDone(sub.id);
+                log(`[${i+1}/${pendingSubs.length}] ⏭️ Ya estaba suscrito (guardado en memoria): ${sub.title}`);
+              } else if (data.error.message.includes('quotaExceeded')) {
+                log('🛑 Cuota diaria agotada. Mañana continuará exactamente por el canal #' + (i+1) + ' sin repetir ninguno.');
                 break;
+              } else {
+                log(`[${i+1}/${pendingSubs.length}] ⚠️ Error en ${sub.title}: ${data.error.message}`);
               }
             } else {
               ok++;
+              markChannelAsDone(sub.id);
               log(`[${i+1}/${pendingSubs.length}] ✅ Suscrito a: ${sub.title}`);
             }
           } catch (err) {
@@ -229,7 +279,7 @@
           await new Promise(r => setTimeout(r, 1200));
         }
 
-        log(`🎉 Proceso finalizado. Nuevas suscripciones añadidas hoy: ${ok}`);
+        log(`🎉 Sesión terminada. Nuevas suscripciones añadidas ahora: ${ok}`);
       } catch (err) {
         log('❌ Error comprobando cuenta de destino: ' + err.message);
       }
