@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Transferir Suscripciones de YouTube</title>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 20px;
+      background: #121212;
+      color: #e0e0e0;
+    }
+    h2 { color: #ff4e45; }
+    .card {
+      background: #1e1e1e;
+      padding: 16px;
+      border-radius: 10px;
+      margin-bottom: 16px;
+      border: 1px solid #333;
+    }
+    input, button {
+      width: 100%;
+      padding: 12px;
+      margin-top: 8px;
+      border-radius: 6px;
+      border: 1px solid #444;
+      box-sizing: border-box;
+      font-size: 15px;
+    }
+    input { background: #2c2c2c; color: #fff; }
+    button {
+      background: #ff0000;
+      color: #fff;
+      border: none;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    button:disabled {
+      background: #555;
+      color: #888;
+      cursor: not-allowed;
+    }
+    #log {
+      background: #000;
+      color: #00ff66;
+      padding: 12px;
+      height: 260px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 13px;
+      border-radius: 8px;
+      white-space: pre-wrap;
+      border: 1px solid #333;
+    }
+  </style>
+</head>
+<body>
+
+  <h2>Transferir Suscripciones YT</h2>
+
+  <div class="card">
+    <label><strong>Paso 1: Tu Client ID de Google Cloud</strong></label>
+    <input type="text" id="clientId" placeholder="123456789-abc...apps.googleusercontent.com">
+  </div>
+
+  <div class="card">
+    <label><strong>Paso 2: Cuenta de Origen</strong></label>
+    <button id="btnSource" onclick="extractSubs()">1. Conectar Origen y Extraer</button>
+    <p id="statusSource" style="margin: 8px 0 0; font-size: 14px; color: #aaa;">Sin extraer aún.</p>
+  </div>
+
+  <div class="card">
+    <label><strong>Paso 3: Cuenta de Destino</strong></label>
+    <button id="btnDest" onclick="transferSubs()" disabled>2. Conectar Destino y Transferir</button>
+  </div>
+
+  <div id="log">Esperando acciones...\n</div>
+
+  <script>
+    let subsList = [];
+    let tokenClient;
+
+    function log(msg) {
+      const logBox = document.getElementById('log');
+      logBox.textContent += msg + '\n';
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    function getClientId() {
+      const id = document.getElementById('clientId').value.trim();
+      if (!id) {
+        alert('Por favor, pega tu Client ID primero en el Paso 1.');
+        return null;
+      }
+      return id;
+    }
+
+    function extractSubs() {
+      const clientId = getClientId();
+      if (!clientId) return;
+
+      tokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: clientId,
+        scope: 'https://www.googleapis.com/auth/youtube.readonly',
+        prompt: 'select_account',
+        callback: async (resp) => {
+          if (resp.error) {
+            log('❌ Error de autenticación: ' + resp.error);
+            return;
+          }
+          log('🔑 Cuenta origen conectada. Extrayendo suscripciones...');
+          await fetchAllSubs(resp.access_token);
+        }
+      });
+      tokenClient.requestAccessToken();
+    }
+
+    async function fetchAllSubs(token) {
+      subsList = [];
+      let pageToken = '';
+      try {
+        do {
+          const url = `https://www.googleapis.com/youtube/v3/subscriptions?part=snippet&mine=true&maxResults=50${pageToken ? '&pageToken=' + pageToken : ''}`;
+          const res = await fetch(url, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          const data = await res.json();
+          if (data.error) throw new Error(data.error.message);
+
+          for (const item of data.items || []) {
+            subsList.push({
+              id: item.snippet.resourceId.channelId,
+              title: item.snippet.title
+            });
+          }
+          pageToken = data.nextPageToken || '';
+          log(`📥 Leídas ${subsList.length} suscripciones...`);
+        } while (pageToken);
+
+        log(`✅ ¡Extracción completada! Total: ${subsList.length} canales.`);
+        document.getElementById('statusSource').textContent = `${subsList.length} canales listos para transferir.`;
+        document.getElementById('btnDest').disabled = false;
+      } catch (err) {
+        log('❌ Error al extraer: ' + err.message);
+      }
+    }
+
+    function transferSubs() {
+      const clientId = getClientId();
+      if (!clientId) return;
+
+      tokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: clientId,
+        scope: 'https://www.googleapis.com/auth/youtube',
+        prompt: 'select_account',
+        callback: async (resp) => {
+          if (resp.error) {
+            log('❌ Error de autenticación: ' + resp.error);
+            return;
+          }
+          log('🔑 Cuenta destino conectada. Iniciando inserción...');
+          await insertAllSubs(resp.access_token);
+        }
+      });
+      tokenClient.requestAccessToken();
+    }
+
+    async function insertAllSubs(token) {
+      document.getElementById('btnDest').disabled = true;
+      let ok = 0;
+
+      for (let i = 0; i < subsList.length; i++) {
+        const sub = subsList[i];
+        try {
+          const res = await fetch('https://www.googleapis.com/youtube/v3/subscriptions?part=snippet', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              snippet: {
+                resourceId: {
+                  kind: 'youtube#channel',
+                  channelId: sub.id
+                }
+              }
+            })
+          });
+          const data = await res.json();
+
+          if (data.error) {
+            if (data.error.message.includes('subscriptionDuplicate')) {
+              log(`[${i+1}/${subsList.length}] ⏭️ Ya estabas suscrito a: ${sub.title}`);
+            } else {
+              log(`[${i+1}/${subsList.length}] ⚠️ Error en ${sub.title}: ${data.error.message}`);
+              if (data.error.message.includes('quotaExceeded')) {
+                log('🛑 Se ha alcanzado el límite diario gratuito de la API de Google (unas 200 suscripciones por día).');
+                break;
+              }
+            }
+          } else {
+            ok++;
+            log(`[${i+1}/${subsList.length}] ✅ Suscrito a: ${sub.title}`);
+          }
+        } catch (err) {
+          log(`[${i+1}/${subsList.length}] ❌ Fallo de red en ${sub.title}`);
+        }
+        // Pausa de 1.2 segundos para evitar bloqueos por exceso de velocidad
+        await new Promise(r => setTimeout(r, 1200));
+      }
+      log(`🎉 Proceso terminado. Nuevas suscripciones añadidas: ${ok}`);
+      document.getElementById('btnDest').disabled = false;
+    }
+  </script>
+</body>
+</html>
